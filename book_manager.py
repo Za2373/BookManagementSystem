@@ -1,7 +1,7 @@
 """
 =====================================================
-  图书管理系统 - 基础骨架版
-  功能：管理员登录、添加图书、查看图书
+  图书管理系统 - 第二次提交
+  新增功能：修改图书、删除图书（含确认机制）
 =====================================================
 """
 
@@ -154,6 +154,76 @@ class BookManager:
         except Exception as e:
             print(f"❌ 查询失败: {e}")
 
+    def update_book(self, book_id):
+        """修改图书信息"""
+        if not self.cursor:
+            print("❌ 数据库未连接")
+            return
+
+        try:
+            # 先查询图书是否存在
+            self.cursor.execute("SELECT * FROM book WHERE book_id = %s", (book_id,))
+            book = self.cursor.fetchone()
+
+            if not book:
+                print(f"❌ 未找到编号为 {book_id} 的图书！")
+                return
+
+            print(f"当前图书信息：《{book['title']}》 作者：{book['author']} 分类：{book['category']}")
+            print("提示：直接回车表示不修改该项")
+
+            new_title = input(f"请输入新书名（当前：{book['title']}）：").strip()
+            new_author = input(f"请输入新作者（当前：{book['author']}）：").strip()
+            new_category = input(f"请输入新分类（当前：{book['category']}）：").strip()
+
+            # 如果输入为空，则保留原值
+            update_data = {
+                "title": new_title if new_title else book['title'],
+                "author": new_author if new_author else book['author'],
+                "category": new_category if new_category else book['category']
+            }
+
+            sql = "UPDATE book SET title=%s, author=%s, category=%s WHERE book_id=%s"
+            self.cursor.execute(sql, (update_data['title'], update_data['author'], update_data['category'], book_id))
+            self.conn.commit()
+            print("✅ 图书信息修改成功！")
+            write_log(f"修改图书：编号{book_id}", self.current_user)
+
+        except Exception as e:
+            self.conn.rollback()
+            print(f"❌ 修改失败: {e}")
+
+    def delete_book(self, book_id):
+        """删除图书（含确认机制）"""
+        if not self.cursor:
+            print("❌ 数据库未连接")
+            return
+
+        try:
+            # 先查询图书是否存在
+            self.cursor.execute("SELECT * FROM book WHERE book_id = %s", (book_id,))
+            book = self.cursor.fetchone()
+
+            if not book:
+                print(f"❌ 未找到编号为 {book_id} 的图书！")
+                return
+
+            print(f"找到图书：《{book['title']}》 作者：{book['author']} 状态：{book['status']}")
+
+            # 调用确认机制
+            if confirm_action("⚠️ 确定要删除这本图书吗？"):
+                sql = "DELETE FROM book WHERE book_id = %s"
+                self.cursor.execute(sql, (book_id,))
+                self.conn.commit()
+                print("✅ 图书删除成功！")
+                write_log(f"删除图书：编号{book_id} 书名《{book['title']}》", self.current_user)
+            else:
+                print("❌ 已取消删除操作。")
+
+        except Exception as e:
+            self.conn.rollback()
+            print(f"❌ 删除失败: {e}")
+
     def close(self):
         """关闭数据库连接"""
         if self.cursor:
@@ -189,6 +259,8 @@ def main():
         print(f"{'='*50}")
         print("  1. 添加图书")
         print("  2. 查看所有图书")
+        print("  3. 修改图书")
+        print("  4. 删除图书")
         print("  0. 退出系统")
         print(f"{'='*50}")
 
@@ -206,6 +278,14 @@ def main():
 
         elif choice == "2":
             bm.show_all_books()
+
+        elif choice == "3":
+            bid = input("请输入要修改的图书编号：").strip()
+            bm.update_book(bid)
+
+        elif choice == "4":
+            bid = input("请输入要删除的图书编号：").strip()
+            bm.delete_book(bid)
 
         elif choice == "0":
             bm.close()
