@@ -1,18 +1,19 @@
 """
 =====================================================
-  图书管理系统 - 第二次提交
-  新增功能：修改图书、删除图书（含确认机制）
+  图书管理系统 - 第三次提交
+  新增功能：借阅图书、归还图书
 =====================================================
 """
 
 import pymysql
 import time
+import datetime
 
 # ====================== 数据库配置 ======================
 DB_CONFIG = {
     "host": "localhost",
     "user": "root",
-    "password": "root123456",  # 请修改为你的MySQL密码
+    "password": "root123456",
     "database": "book_db",
     "charset": "utf8mb4"
 }
@@ -161,7 +162,6 @@ class BookManager:
             return
 
         try:
-            # 先查询图书是否存在
             self.cursor.execute("SELECT * FROM book WHERE book_id = %s", (book_id,))
             book = self.cursor.fetchone()
 
@@ -176,7 +176,6 @@ class BookManager:
             new_author = input(f"请输入新作者（当前：{book['author']}）：").strip()
             new_category = input(f"请输入新分类（当前：{book['category']}）：").strip()
 
-            # 如果输入为空，则保留原值
             update_data = {
                 "title": new_title if new_title else book['title'],
                 "author": new_author if new_author else book['author'],
@@ -200,7 +199,6 @@ class BookManager:
             return
 
         try:
-            # 先查询图书是否存在
             self.cursor.execute("SELECT * FROM book WHERE book_id = %s", (book_id,))
             book = self.cursor.fetchone()
 
@@ -210,7 +208,6 @@ class BookManager:
 
             print(f"找到图书：《{book['title']}》 作者：{book['author']} 状态：{book['status']}")
 
-            # 调用确认机制
             if confirm_action("⚠️ 确定要删除这本图书吗？"):
                 sql = "DELETE FROM book WHERE book_id = %s"
                 self.cursor.execute(sql, (book_id,))
@@ -223,6 +220,81 @@ class BookManager:
         except Exception as e:
             self.conn.rollback()
             print(f"❌ 删除失败: {e}")
+
+    # ------------------ 新增：借阅与归还 ------------------
+
+    def borrow_book(self, book_id, reader_id, reader_name):
+        """借阅图书"""
+        if not self.cursor:
+            print("❌ 数据库未连接")
+            return
+
+        try:
+            # 1. 检查图书是否存在且可借
+            self.cursor.execute("SELECT * FROM book WHERE book_id = %s", (book_id,))
+            book = self.cursor.fetchone()
+
+            if not book:
+                print(f"❌ 未找到编号为 {book_id} 的图书！")
+                return
+
+            if book['status'] == '已借出':
+                print(f"❌ 该图书已被借出，无法再次借阅！")
+                return
+
+            # 2. 更新图书状态为已借出
+            self.cursor.execute("UPDATE book SET status='已借出' WHERE book_id=%s", (book_id,))
+
+            # 3. 在 borrower 表插入借阅记录
+            borrow_date = datetime.date.today() # 获取当前日期
+            sql = "INSERT INTO borrower(reader_id, reader_name, book_id, borrow_date, is_returned) VALUES(%s,%s,%s,%s,0)"
+            self.cursor.execute(sql, (reader_id, reader_name, book_id, borrow_date))
+
+            self.conn.commit()
+            print(f"✅ 借阅成功！《{book['title']}》已借给 {reader_name}")
+            write_log(f"借出图书：编号{book_id} 借阅人{reader_name}", self.current_user)
+
+        except Exception as e:
+            self.conn.rollback()
+            print(f"❌ 借阅失败: {e}")
+
+    def return_book(self, book_id):
+        """归还图书"""
+        if not self.cursor:
+            print("❌ 数据库未连接")
+            return
+
+        try:
+            # 1. 检查图书状态
+            self.cursor.execute("SELECT * FROM book WHERE book_id = %s", (book_id,))
+            book = self.cursor.fetchone()
+
+            if not book:
+                print(f"❌ 未找到编号为 {book_id} 的图书！")
+                return
+
+            if book['status'] == '可借阅':
+                print(f"❌ 该图书未被借出，无需归还！")
+                return
+
+            # 2. 更新图书状态为可借阅
+            self.cursor.execute("UPDATE book SET status='可借阅' WHERE book_id=%s", (book_id,))
+
+            # 3. 更新借阅记录：找到该书最近一条未归还的记录
+            return_date = datetime.date.today() # 获取当前日期
+            sql = """UPDATE borrower 
+                     SET return_date=%s, is_returned=1 
+                     WHERE book_id=%s AND is_returned=0 
+                     ORDER BY borrow_date DESC LIMIT 1"""
+            self.cursor.execute(sql, (return_date, book_id))
+
+            self.conn.commit()
+            print(f"✅ 归还成功！《{book['title']}》已归还入库")
+            write_log(f"归还图书：编号{book_id}", self.current_user)
+
+        except Exception as e:
+            self.conn.rollback()
+            print(f"❌ 归还失败: {e}")
 
     def close(self):
         """关闭数据库连接"""
@@ -238,7 +310,6 @@ class BookManager:
 def main():
     """主程序入口"""
 
-    # 第一步：管理员登录
     login_result = login_system()
     if not login_result:
         print("👋 已退出系统，再见！")
@@ -246,12 +317,10 @@ def main():
 
     current_user, user_role = login_result
 
-    # 第二步：初始化图书管理对象
     bm = BookManager(current_user, user_role)
     if not bm.cursor:
         return
 
-    # 第三步：主菜单循环
     while True:
         role_tag = "👑超管" if user_role == 'super' else "👤管员"
         print(f"\n{'='*50}")
@@ -261,6 +330,8 @@ def main():
         print("  2. 查看所有图书")
         print("  3. 修改图书")
         print("  4. 删除图书")
+        print("  5. 借阅图书")
+        print("  6. 归还图书")
         print("  0. 退出系统")
         print(f"{'='*50}")
 
@@ -286,6 +357,19 @@ def main():
         elif choice == "4":
             bid = input("请输入要删除的图书编号：").strip()
             bm.delete_book(bid)
+
+        elif choice == "5":
+            bid = input("请输入要借阅的图书编号：").strip()
+            rid = input("请输入读者ID：").strip()
+            rname = input("请输入读者姓名：").strip()
+            if bid and rid and rname:
+                bm.borrow_book(bid, rid, rname)
+            else:
+                print("❌ 编号、读者ID和姓名不能为空！")
+
+        elif choice == "6":
+            bid = input("请输入要归还的图书编号：").strip()
+            bm.return_book(bid)
 
         elif choice == "0":
             bm.close()
